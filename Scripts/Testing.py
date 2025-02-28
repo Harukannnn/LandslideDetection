@@ -151,14 +151,14 @@ hsv_mask[..., 1] = 255  # 饱和度设置为最大值
 lane_mask = np.zeros(frame1.shape[:2], dtype=np.uint8)
 
 
-
 # 图像亮度和对比度增强
 def adjust_brightness_contrast(image, alpha=1.5, beta=50):
     return cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
 
 # 车道掩膜更新次数
 frame_count = 0
-update_lane_mask_until = 500  # 在前500帧持续更新车道掩膜
+update_lane_mask_until = 30  # 在前500帧持续更新车道掩膜
+monitoring_started = False
 
 while cap.isOpened():
     ret, frame2 = cap.read()
@@ -188,13 +188,30 @@ while cap.isOpened():
             hull = cv2.convexHull(all_points)
 
             # 绘制多边形车道掩膜
-            lane_mask = np.zeros(frame2.shape[:2], dtype=np.uint8)
+            temp_mask = np.zeros(frame2.shape[:2], dtype=np.uint8)
             cv2.fillConvexPoly(lane_mask, hull, 255)
+
+            # 将新的掩膜与旧的掩膜进行合并 (累积车道区域)
+            lane_mask = cv2.bitwise_or(lane_mask, temp_mask)
+
+        # 显示初始化状态
+        cv2.putText(frame2, "Initializing Lane Mask...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+    else:
+        # 掩膜已稳定，可以开始滑坡监测
+        monitoring_started = True
+        cv2.putText(frame2, "Monitoring...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
     frame_count += 1
 
+    # 生成非车道区域掩膜
+    non_lane_mask = cv2.bitwise_not(lane_mask)
+
+    # 在应用背景减除和光流法前，先过滤车道区域
+    masked_frame = cv2.bitwise_and(frame2, frame2, mask=non_lane_mask)
+
     # 背景减除
-    fg_mask = bg_subtractor.apply(frame2)
+    fg_mask = bg_subtractor.apply(masked_frame)
 
     # 去除噪声 (形态学操作)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -202,7 +219,7 @@ while cap.isOpened():
     fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
 
     # 计算光流
-    gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
     flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
     # 计算光流的幅度和方向
@@ -221,20 +238,17 @@ while cap.isOpened():
     # 结合背景减除的结果
     combined_mask = cv2.bitwise_and(fg_mask, motion_mask)
 
-    # 使用车道掩膜过滤车道区域
-    non_lane_mask = cv2.bitwise_not(lane_mask)
-    combined_mask = cv2.bitwise_and(combined_mask, non_lane_mask)
+    if monitoring_started:
+        # 轮廓检测，筛选出较大的运动区域
+        contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 轮廓检测，筛选出较大的运动区域
-    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > 5000:  # 仅处理大于一定面积的轮廓 (可调整)
-            x, y, w, h = cv2.boundingRect(cnt)
-            cv2.rectangle(frame2, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame2, "Possible Landslide", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > 5000:  # 仅处理大于一定面积的轮廓 (可调整)
+                x, y, w, h = cv2.boundingRect(cnt)
+                cv2.rectangle(frame2, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(frame2, "Possible Landslide", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                print("Landslide!")
     # 显示结果
     cv2.imshow('Original Frame', frame2)
     cv2.imshow('Background Subtraction', fg_mask)
