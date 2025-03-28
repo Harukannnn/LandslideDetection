@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Frame</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: 240px;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .video-frame {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .add-button {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            font-size: 30px;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: transform 0.2s;
+            z-index: 1000;
+        }
+
+        .add-button:hover {
+            transform: scale(1.1);
+        }
+
+        .url-input-container {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            z-index: 1000;
+            display: none;
+        }
+
+        .url-input-container input {
+            width: 300px;
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .url-input-container button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+
+        .url-input-container button:hover {
+            background-color: #45a049;
+        }
+
+        .status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 5px 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1001;
+        }
+
+        .close-button {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            width: 20px;
+            height: 20px;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 12px;
+            z-index: 1002;
+        }
+
+        .close-button:hover {
+            background-color: rgba(255, 0, 0, 0.9);
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-container" id="gridContainer">
+        <!-- 视频容器将在这里动态添加 -->
+    </div>
+    <button class="add-button" id="addButton" onclick="showUrlInput()">+</button>
+    <div class="url-input-container" id="urlInputContainer">
+        <h3>输入视频流URL</h3>
+        <input type="text" id="urlInput" placeholder="输入视频流URL (例如: http://192.168.26.23:8080/stream.mjpeg)">
+        <br>
+        <button onclick="startStream()">开始监控</button>
+        <button onclick="hideUrlInput()">取消</button>
+    </div>
+
+    <script>
+        let streamCount = 0;
+        const gridContainer = document.getElementById('gridContainer');
+        const urlInputContainer = document.getElementById('urlInputContainer');
+        const urlInput = document.getElementById('urlInput');
+        const addButton = document.getElementById('addButton');
+
+        function showUrlInput() {
+            urlInputContainer.style.display = 'block';
+            addButton.style.display = 'none';
+        }
+
+        function hideUrlInput() {
+            urlInputContainer.style.display = 'none';
+            addButton.style.display = 'flex';
+            urlInput.value = '';
+        }
+
+        function createVideoContainer() {
+            const container = document.createElement('div');
+            container.className = 'video-container';
+            container.id = `video-container-${streamCount}`;
+
+            const videoElement = document.createElement('img');
+            videoElement.className = 'video-frame';
+            videoElement.id = `video-${streamCount}`;
+            videoElement.alt = 'Video Stream';
+
+            const statusElement = document.createElement('div');
+            statusElement.className = 'status';
+            statusElement.id = `status-${streamCount}`;
+            statusElement.textContent = '未连接';
+
+            const closeButton = document.createElement('button');
+            closeButton.className = 'close-button';
+            closeButton.innerHTML = '×';
+            closeButton.onclick = () => stopStream(streamCount);
+
+            container.appendChild(videoElement);
+            container.appendChild(statusElement);
+            container.appendChild(closeButton);
+            gridContainer.appendChild(container);
+
+            return container;
+        }
+
+        function startStream() {
+            const url = urlInput.value.trim();
+            if (!url) {
+                alert('请输入有效的URL');
+                return;
+            }
+
+            const container = createVideoContainer();
+            const streamId = streamCount++;
+
+            // 发送URL到后端
+            fetch('/start_stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    url: url,
+                    streamId: streamId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    urlInputContainer.style.display = 'none';
+                    addButton.style.display = 'flex';
+                    document.getElementById(`status-${streamId}`).textContent = '已连接';
+                    startVideoStream(streamId);
+                } else {
+                    alert('连接失败: ' + data.message);
+                    container.remove();
+                }
+            })
+            .catch(error => {
+                alert('连接错误: ' + error);
+                container.remove();
+            });
+        }
+
+        function startVideoStream(streamId) {
+            const videoElement = document.getElementById(`video-${streamId}`);
+            videoElement.src = `/video_feed/${streamId}`;
+            
+            videoElement.onerror = function() {
+                console.error('视频加载错误');
+                document.getElementById(`status-${streamId}`).textContent = '连接错误';
+                stopStream(streamId);
+            };
+        }
+
+        function stopStream(streamId) {
+            fetch('/stop_stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ streamId: streamId })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const container = document.getElementById(`video-container-${streamId}`);
+                    if (container) {
+                        container.remove();
+                    }
+                }
+            });
+        }
+
+        // 页面关闭时停止所有流
+        window.onbeforeunload = function() {
+            for (let i = 0; i < streamCount; i++) {
+                stopStream(i);
+            }
+        };
+    </script>
+</body>
+</html>
