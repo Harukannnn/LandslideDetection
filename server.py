@@ -10,6 +10,8 @@ app = Flask(__name__)
 # 全局变量
 streams = {}  # 存储所有视频流的信息
 current_frame = None
+is_initializing = False
+lane_mask = None
 
 class VideoStream:
     def __init__(self, url):
@@ -142,15 +144,17 @@ def stop_stream(stream_id):
 
 @app.route('/toggle_initialization/<int:stream_id>', methods=['POST'])
 def toggle_initialization(stream_id):
-    global streams
+    global streams, is_initializing, lane_mask
     try:
         if stream_id in streams:
             stream = streams[stream_id]
             stream.is_initializing = not stream.is_initializing
+            # 同步更新全局变量
+            is_initializing = stream.is_initializing
             if not stream.is_initializing:
                 # 保存车道掩膜
                 stream.lane_mask = lane_mask
-            return jsonify({'is_initializing': stream.is_initializing})
+            return jsonify({'success': True, 'initializing': stream.is_initializing})
         return jsonify({'error': '未找到指定的视频流'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500

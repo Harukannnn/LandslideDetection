@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>视频监控</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(640px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .video-container {
+            position: relative;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .video-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .status {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            color: white;
+            font-size: 14px;
+        }
+        .status.connected {
+            background-color: #4CAF50;
+        }
+        .status.disconnected {
+            background-color: #f44336;
+        }
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .close-btn:hover {
+            background: rgba(0,0,0,0.7);
+        }
+        .detect-btn {
+            position: absolute;
+            top: 10px;
+            left: 100px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .detect-btn:hover {
+            background: rgba(0,0,0,0.7);
+        }
+        .detect-btn.active {
+            background: #4CAF50;
+        }
+        .init-btn {
+            position: absolute;
+            top: 10px;
+            left: 190px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .init-btn:hover {
+            background: rgba(0,0,0,0.7);
+        }
+        .init-btn.active {
+            background: #2196F3;
+        }
+        .add-button {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            font-size: 30px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .add-button:hover {
+            background: #45a049;
+        }
+        .url-input-container {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: none;
+            z-index: 1000;
+        }
+        .url-input-container input {
+            width: 300px;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .url-input-container button {
+            padding: 8px 15px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .url-input-container .confirm-btn {
+            background: #4CAF50;
+            color: white;
+        }
+        .url-input-container .cancel-btn {
+            background: #f44336;
+            color: white;
+        }
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-container" id="videoGrid"></div>
+    <button class="add-button" onclick="showUrlInput()">+</button>
+    
+    <div class="overlay" id="overlay"></div>
+    <div class="url-input-container" id="urlInputContainer">
+        <input type="text" id="urlInput" placeholder="输入视频流URL">
+        <button class="confirm-btn" onclick="startVideoStream(document.getElementById('urlInput').value)">确认</button>
+        <button class="cancel-btn" onclick="hideUrlInput()">取消</button>
+    </div>
+
+    <script>
+        let nextStreamId = 1;
+        const videoGrid = document.getElementById('videoGrid');
+        const overlay = document.getElementById('overlay');
+        const urlInputContainer = document.getElementById('urlInputContainer');
+        const urlInput = document.getElementById('urlInput');
+
+        function showUrlInput() {
+            overlay.style.display = 'block';
+            urlInputContainer.style.display = 'block';
+        }
+
+        function hideUrlInput() {
+            overlay.style.display = 'none';
+            urlInputContainer.style.display = 'none';
+            urlInput.value = '';
+        }
+
+        function createVideoContainer(streamId) {
+            const container = document.createElement('div');
+            container.className = 'video-container';
+            container.id = `container-${streamId}`;
+            
+            const img = document.createElement('img');
+            img.id = `video-${streamId}`;
+            img.src = `/video_feed/${streamId}`;
+            
+            const status = document.createElement('div');
+            status.className = 'status connected';
+            status.id = `status-${streamId}`;
+            status.textContent = '已连接';
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'close-btn';
+            closeBtn.textContent = '关闭';
+            closeBtn.onclick = () => stopStream(streamId);
+
+            const detectBtn = document.createElement('button');
+            detectBtn.className = 'detect-btn active';
+            detectBtn.id = `detect-${streamId}`;
+            detectBtn.textContent = '检测开启';
+            detectBtn.onclick = () => toggleDetection(streamId);
+
+            const initBtn = document.createElement('button');
+            initBtn.className = 'init-btn';
+            initBtn.id = `init-${streamId}`;
+            initBtn.textContent = '初始化';
+            initBtn.onclick = () => toggleInitialization(streamId);
+            
+            container.appendChild(img);
+            container.appendChild(status);
+            container.appendChild(closeBtn);
+            container.appendChild(detectBtn);
+            container.appendChild(initBtn);
+            
+            return container;
+        }
+
+        function toggleDetection(streamId) {
+            fetch(`/toggle_detection/${streamId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const detectBtn = document.getElementById(`detect-${streamId}`);
+                    if (data.detection_enabled) {
+                        detectBtn.textContent = '检测开启';
+                        detectBtn.classList.add('active');
+                    } else {
+                        detectBtn.textContent = '检测关闭';
+                        detectBtn.classList.remove('active');
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('切换检测状态时发生错误');
+            });
+        }
+
+        function toggleInitialization(streamId) {
+            fetch(`/toggle_initialization/${streamId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const initBtn = document.getElementById(`init-${streamId}`);
+                    if (data.initializing) {
+                        initBtn.textContent = '停止初始化';
+                        initBtn.classList.add('active');
+                    } else {
+                        initBtn.textContent = '初始化';
+                        initBtn.classList.remove('active');
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('切换初始化状态时发生错误');
+            });
+        }
+
+        function startVideoStream(url) {
+            // 清除之前的定时器
+            if (window.streamTimer) {
+                clearInterval(window.streamTimer);
+            }
+
+            // 发送请求启动视频流
+            fetch('/start_stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: url })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                console.log('视频流启动成功，stream_id:', data.stream_id);
+                
+                // 创建视频容器
+                const container = createVideoContainer(data.stream_id);
+                document.querySelector('.grid-container').appendChild(container);
+                
+                // 更新视频源
+                const videoElement = container.querySelector('img');
+                videoElement.src = `/video_feed/${data.stream_id}`;
+                
+                // 更新状态
+                const statusElement = container.querySelector('.status');
+                statusElement.textContent = '已连接';
+                statusElement.className = 'status connected';
+                
+                // 隐藏URL输入界面
+                document.querySelector('.url-input-container').style.display = 'none';
+                document.querySelector('.add-button').style.display = 'block';
+            })
+            .catch(error => {
+                console.error('启动视频流失败:', error);
+                alert('启动视频流失败: ' + error.message);
+            });
+        }
+
+        function stopStream(streamId) {
+            fetch('/stop_stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    streamId: streamId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const container = document.getElementById(`container-${streamId}`);
+                    if (container) {
+                        container.remove();
+                    }
+                } else {
+                    alert('停止视频流失败: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('停止视频流时发生错误');
+            });
+        }
+
+        // 点击遮罩层关闭输入框
+        overlay.onclick = hideUrlInput;
+    </script>
+</body>
+</html>

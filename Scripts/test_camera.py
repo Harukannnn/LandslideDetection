@@ -13,7 +13,7 @@ yolov5_path = os.path.join(current_dir, '..', 'yolov5')
 # 加载YOLO模型
 try:
     model = torch.hub.load(yolov5_path, 'yolov5s', source='local')
-    model.conf = 0.5
+    model.conf = 0.3  # 降低置信度阈值
     model.classes = [2,3,5,7]  # 车辆类别
     print(f"成功加载模型: yolov5s")
 except Exception as e:
@@ -50,23 +50,26 @@ def initialize_lane_mask(frame):
     for det in results.xyxy[0]:  # 遍历检测结果
         x1, y1, x2, y2, conf, cls = det.cpu().numpy()
         
-        # 扩大检测框的范围
-        width = x2 - x1
-        height = y2 - y1
-        x1 = max(0, int(x1 - width * 0.3))
-        x2 = min(frame.shape[1], int(x2 + width * 0.3))
-        y1 = max(0, int(y1 - height * 0.2))
-        y2 = min(frame.shape[0], int(y2 + height * 0.2))
-        
-        # 在掩膜上标记车辆区域
-        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-        
-        # 绘制边界框
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        # 添加标签
-        label = f'Vehicle {conf:.2f}'
-        cv2.putText(frame, label, (x1, y1 - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # 处理所有车辆类别（2:car, 3:motorcycle, 5:bus, 7:truck）
+        if int(cls) in [2, 3, 5, 7] and conf > 0.3:  # 降低置信度阈值
+            # 扩大检测框的范围
+            width = x2 - x1
+            height = y2 - y1
+            x1 = max(0, int(x1 - width * 0.3))
+            x2 = min(frame.shape[1], int(x2 + width * 0.3))
+            y1 = max(0, int(y1 - height * 0.2))
+            y2 = min(frame.shape[0], int(y2 + height * 0.2))
+            
+            # 在掩膜上标记车辆区域
+            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+            
+            # 绘制边界框
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # 添加标签
+            class_names = {2: 'Car', 3: 'Motorcycle', 5: 'Bus', 7: 'Truck'}
+            label = f'{class_names[int(cls)]} {conf:.2f}'
+            cv2.putText(frame, label, (x1, y1 - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
     # 对掩膜进行膨胀操作
     kernel = np.ones((30, 30), np.uint8)

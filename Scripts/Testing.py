@@ -1,265 +1,251 @@
+# -*- coding: utf-8 -*-
 import cv2
-import numpy as np
 import torch
+import numpy as np
+import time
 
 
-model = torch.hub.load('../yolov5','yolov5s',source='local')
+model = torch.hub.load('E:/Pycharm/TestingFYP/yolov5','yolov5s',source='local')
 
-# VEHICLE_CLASSES = ['car','truck','bus','motorbike']
 # 视频流地址
-url = "C:/Users/Heren/Documents/WeChat Files/wxid_6u4zst4m16e122/FileStorage/Video/2025-02/landsliding.mp4"
+url = "C:/Users/Heren/Documents/WeChat Files/wxid_6u4zst4m16e122/FileStorage/Video/2025-02/landsliding.mp4"  # 使用本地视频文件
+
+print("正在打开视频文件...")
 cap = cv2.VideoCapture(url)
 
+if not cap.isOpened():
+    print("无法打开视频文件，请检查文件路径")
+    exit(1)
 
-# # 处理镜头晃动
-# n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-# width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-# height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-# fps = cap.get(cv2.CAP_PROP_FPS)
-#
-# # 用于特征点检测的光流法参数
-# feature_params = dict(maxCorners=200, qualityLevel=0.01, minDistance=30, blockSize=3)
-# lk_params = dict(winSize=(15, 15), maxLevel=2,
-#                  criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-#
-# # 读取第一帧
-# ret, prev_frame = cap.read()
-# prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-#
-# # 找到第一帧的特征点
-# prev_pts = cv2.goodFeaturesToTrack(prev_gray, mask=None, **feature_params)
-#
-# # 创建一个平移矢量列表
-# transforms = np.zeros((n_frames-1, 3), np.float32)
-#
-# # 遍历视频帧
-# for i in range(n_frames-1):
-#     ret, curr_frame = cap.read()
-#     if not ret:
-#         break
-#
-#     curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-#
-#     # 计算光流
-#     curr_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None, **lk_params)
-#
-#     # 选择好的点
-#     good_old = prev_pts[status == 1]
-#     good_new = curr_pts[status == 1]
-#
-#     # 计算变换矩阵 (仅平移 + 旋转, 排除缩放)
-#     matrix, _ = cv2.estimateAffinePartial2D(good_old, good_new)
-#
-#     # 提取平移和旋转信息
-#     dx = matrix[0, 2]
-#     dy = matrix[1, 2]
-#     da = np.arctan2(matrix[1, 0], matrix[0, 0])
-#
-#     transforms[i] = [dx, dy, da]
-#
-#     # 更新前一帧
-#     prev_gray = curr_gray.copy()
-#     prev_pts = good_new.reshape(-1, 1, 2)
-#
-# # 平滑运动 (移动平均)
-# trajectory = np.cumsum(transforms, axis=0)
-# smoothed_trajectory = cv2.blur(trajectory, (15, 1))
-#
-# # 计算平滑后的差值
-# difference = smoothed_trajectory - trajectory
-# transforms_smooth = transforms + difference
-#
-# # 应用平滑变换到视频
-# cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-#
-# for i in range(n_frames-1):
-#     ret, frame = cap.read()
-#     if not ret:
-#         break
-#
-#     dx, dy, da = transforms_smooth[i]
-#     matrix = np.array([[np.cos(da), -np.sin(da), dx],
-#                        [np.sin(da),  np.cos(da), dy]])
-#
-#     # 应用仿射变换
-#     stabilized_frame = cv2.warpAffine(frame, matrix, (width, height))
-#
-#     cv2.imshow("Stabilized Video", stabilized_frame)
-#     if cv2.waitKey(10) & 0xFF == ord('q'):
-#         break
-#
-# cap.release()
-#
-# cv2.destroyAllWindows()
+# 获取视频信息
+total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+print(f"视频总帧数: {total_frames}")
+print(f"视频帧率: {fps}")
 
-
-
-# # 初始化背景减除器
-# fgbg = cv2.createBackgroundSubtractorKNN(history=500, dist2Threshold=400, detectShadows=True)
-#
-#
-# while True:
-#     ret, frame = cap.read()
-#     if not ret:
-#         print("视频读取结束或出错")
-#         break
-#
-#     results = model(frame)
-#     detections = results.xyxy[0].cpu().numpy()
-#
-#     mask = 255 * np.ones(frame.shape[:2], dtype=np.uint8)
-#
-#     # 3. 绘制车辆检测框并过滤车辆运动
-#     for *xyxy, conf, cls in detections:
-#         if int(cls) == 2 or int(cls) == 5 or int(cls) == 7:  # 2=car, 5=bus, 7=truck (COCO类别ID)
-#             x1, y1, x2, y2 = map(int, xyxy)
-#             cv2.rectangle(mask, (x1, y1), (x2, y2), (0, 0, 0), -1)  # 将车辆区域涂黑 (设置为背景)
-#
-#     # 应用背景减除 (使用掩膜处理后的帧)
-#     fg_mask = fgbg.apply(frame)
-#
-#     # 将车辆区域在前景掩膜中移除 (保持背景颜色，车辆变为黑色)
-#     fg_mask = cv2.bitwise_and(fg_mask, mask)
-#
-#     # 显示结果
-#     cv2.imshow('Foreground Mask', fg_mask)
-#     cv2.imshow('Original Frame', frame)
-#
-#     if cv2.waitKey(1) & 0xFF == ord('q'):
-#         break
-#
-# cap.release()
-# cv2.destroyAllWindows()
-
+# 设置视频参数
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 model.conf = 0.5
 model.classes = [2,3,5,7]
 
 # 背景减除器 (MOG2)
-bg_subtractor = cv2.createBackgroundSubtractorKNN(history=500, dist2Threshold=400, detectShadows=True)
+bg_subtractor = cv2.createBackgroundSubtractorKNN(history=100, dist2Threshold=50, detectShadows=True)
 
 # 用于光流法的初始帧
 ret, frame1 = cap.read()
-frame1 = cv2.resize(frame1, (640, 480))  # 调整大小，提升处理速度
+if not ret:
+    print("无法读取第一帧，程序退出")
+    cap.release()
+    exit(1)
+
+frame1 = cv2.resize(frame1, (640, 480))
 prev_gray = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
 
-# 创建 HSV 图像用于显示光流 (光流的可视化)
+# 创建 HSV 图像用于显示光流
 hsv_mask = np.zeros_like(frame1)
-hsv_mask[..., 1] = 255  # 饱和度设置为最大值
+hsv_mask[..., 1] = 255
 
 # 初始化车道掩膜
 lane_mask = np.zeros(frame1.shape[:2], dtype=np.uint8)
 
 
 # 图像亮度和对比度增强
-def adjust_brightness_contrast(image, alpha=1.5, beta=50):
+def adjust_brightness_contrast(image, clip_hist_percent=1):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    hist_size = len(hist)
+
+    accumulator = np.cumsum(hist)
+    maximum = accumulator[-1]
+
+    clip_hist_percent *= (maximum / 100.0)
+    clip_hist_percent /= 2.0
+
+    minimum_gray = 0
+    while accumulator[minimum_gray] < clip_hist_percent:
+        minimum_gray += 1
+
+    maximum_gray = hist_size - 1
+    while accumulator[maximum_gray] >= (maximum - clip_hist_percent):
+        maximum_gray -= 1
+
+    alpha = 255.0 / (maximum_gray - minimum_gray)
+    beta = -minimum_gray * alpha
     return cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
 
-# 车道掩膜更新次数
+# 帧率控制参数
 frame_count = 0
-update_lane_mask_until = 30  # 在前500帧持续更新车道掩膜
-monitoring_started = False
+frame_skip = 2  # 减少处理间隔，提高帧率
+yolo_skip = 5   # 减少YOLO检测间隔
+last_frame_time = time.time()
+target_fps = 30
+frame_interval = 1.0 / target_fps
 
-while cap.isOpened():
+# 车道掩膜初始化控制
+initializing = False
+lane_mask_history = []
+history_size = 30
+mask_dilation_kernel = np.ones((30, 30), np.uint8)
+persistence_threshold = 0.7
+
+def update_lane_mask(temp_mask):
+    global lane_mask
+    # 对掩膜进行膨胀操作
+    dilated_mask = cv2.dilate(temp_mask, mask_dilation_kernel, iterations=2)
+    # 对掩膜进行平滑处理
+    dilated_mask = cv2.GaussianBlur(dilated_mask, (21, 21), 0)
+    # 二值化处理
+    _, dilated_mask = cv2.threshold(dilated_mask, 127, 255, cv2.THRESH_BINARY)
+    
+    # 更新车道掩膜（使用逻辑或操作，保持累积性）
+    lane_mask = cv2.bitwise_or(lane_mask, dilated_mask)
+
+def start_initialization():
+    global initializing, lane_mask_history, lane_mask
+    initializing = True
+    lane_mask_history = []
+    lane_mask = np.zeros(frame1.shape[:2], dtype=np.uint8)
+    print("开始初始化车道掩膜...")
+
+def stop_initialization():
+    global initializing
+    initializing = False
+    print("停止初始化车道掩膜")
+
+# 主循环
+while True:
+    # 帧率控制
+    current_time = time.time()
+    elapsed = current_time - last_frame_time
+    if elapsed < frame_interval:
+        time.sleep(frame_interval - elapsed)
+    last_frame_time = time.time()
+
     ret, frame2 = cap.read()
     if not ret:
+        print("视频播放结束")
         break
 
+    frame_count += 1
     frame2 = cv2.resize(frame2, (640, 480))
-    frame2 = adjust_brightness_contrast(frame2)  # 图像增强
 
-    # 使用 YOLOv5 进行车辆检测
-    results = model(frame2)
-    detections = results.pandas().xyxy[0]
+    # 显示当前进度
+    progress = (frame_count / total_frames) * 100
+    cv2.putText(frame2, f"Progress: {progress:.1f}%", (50, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    # 仅在初始阶段生成车道掩膜 (通过多边形拟合)
-    if frame_count < update_lane_mask_until:
+    # 每5帧进行一次图像增强
+    if frame_count % 5 == 0:
+        frame2 = adjust_brightness_contrast(frame2)
+
+    # 每10帧进行一次YOLO检测
+    if frame_count % yolo_skip == 0:
+        results = model(frame2)
+        detections = results.pandas().xyxy[0]
+
+    # 车道掩膜初始化控制
+    if initializing and frame_count % 3 == 0:
         vehicle_contours = []
         for _, row in detections.iterrows():
             x1, y1, x2, y2 = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
-            cv2.rectangle(frame2, (x1, y1), (x2, y2), (0, 255, 255), 2)  # 车辆检测框
-
-            # 将车辆框转换为轮廓点
+            # 扩大检测框的范围
+            width = x2 - x1
+            height = y2 - y1
+            x1 = max(0, x1 - int(width * 0.3))
+            x2 = min(frame2.shape[1], x2 + int(width * 0.3))
+            y1 = max(0, y1 - int(height * 0.2))
+            y2 = min(frame2.shape[0], y2 + int(height * 0.2))
+            
+            cv2.rectangle(frame2, (x1, y1), (x2, y2), (0, 255, 255), 2)
             vehicle_contours.append(np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]]))
 
-        # 计算车道的多边形拟合 (凸包)
         if len(vehicle_contours) > 0:
             all_points = np.concatenate(vehicle_contours)
             hull = cv2.convexHull(all_points)
-
-            # 绘制多边形车道掩膜
             temp_mask = np.zeros(frame2.shape[:2], dtype=np.uint8)
-            cv2.fillConvexPoly(lane_mask, hull, 255)
+            cv2.fillConvexPoly(temp_mask, hull, 255)
+            update_lane_mask(temp_mask)
 
-            # 将新的掩膜与旧的掩膜进行合并 (累积车道区域)
-            lane_mask = cv2.bitwise_or(lane_mask, temp_mask)
-
-        # 显示初始化状态
         cv2.putText(frame2, "Initializing Lane Mask...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
     else:
-        # 掩膜已稳定，可以开始滑坡监测
-        monitoring_started = True
         cv2.putText(frame2, "Monitoring...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-    frame_count += 1
 
     # 生成非车道区域掩膜
     non_lane_mask = cv2.bitwise_not(lane_mask)
-
-    # 在应用背景减除和光流法前，先过滤车道区域
+    # 对非车道区域掩膜进行额外的膨胀操作
+    non_lane_mask = cv2.dilate(non_lane_mask, np.ones((15, 15), np.uint8), iterations=1)
     masked_frame = cv2.bitwise_and(frame2, frame2, mask=non_lane_mask)
 
-    # 背景减除
-    fg_mask = bg_subtractor.apply(masked_frame)
+    # 初始化combined_mask
+    combined_mask = np.zeros(frame2.shape[:2], dtype=np.uint8)
 
-    # 去除噪声 (形态学操作)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+    # 每2帧进行一次背景减除和光流计算
+    if frame_count % frame_skip == 0:
+        # 背景减除
+        fg_mask = bg_subtractor.apply(masked_frame)
 
-    # 计算光流
-    gray = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
-    flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+        # 去除噪声
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
 
-    # 计算光流的幅度和方向
-    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        # 计算光流
+        gray = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
+        flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
-    # 设置光流颜色 (Hue 色调表示方向, Value 表示强度)
-    hsv_mask[..., 0] = angle * 180 / np.pi / 2
-    hsv_mask[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
+        # 计算光流的幅度和方向
+        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
-    # 转换为 BGR 颜色空间进行显示
-    flow_rgb = cv2.cvtColor(hsv_mask, cv2.COLOR_HSV2BGR)
+        # 设置光流颜色
+        hsv_mask[..., 0] = angle * 180 / np.pi / 2
+        hsv_mask[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
 
-    # 只保留运动强度大的区域 (滑坡通常是大面积运动)
-    motion_mask = cv2.inRange(magnitude, 2.0, 10.0)  # 设置运动幅度阈值 (可调整)
+        # 转换为BGR颜色空间
+        flow_rgb = cv2.cvtColor(hsv_mask, cv2.COLOR_HSV2BGR)
 
-    # 结合背景减除的结果
-    combined_mask = cv2.bitwise_and(fg_mask, motion_mask)
+        # 运动检测阈值
+        motion_mask = cv2.inRange(magnitude, 2.0, 10.0)
+        combined_mask = cv2.bitwise_and(fg_mask, motion_mask)
 
-    if monitoring_started:
-        # 轮廓检测，筛选出较大的运动区域
+        # 轮廓检测
         contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area > 5000:  # 仅处理大于一定面积的轮廓 (可调整)
+            if area > 5000:
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(frame2, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.putText(frame2, "Possible Landslide", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 print("Landslide!")
+
+        prev_gray = gray
+
     # 显示结果
     cv2.imshow('Original Frame', frame2)
-    cv2.imshow('Background Subtraction', fg_mask)
-    cv2.imshow('Optical Flow', flow_rgb)
     cv2.imshow('Landslide Detection', combined_mask)
     cv2.imshow('Lane Mask', lane_mask)
 
-    prev_gray = gray  # 更新前一帧
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    # 按键控制
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):  # 退出
         break
+    elif key == ord('i'):  # 开始初始化
+        start_initialization()
+    elif key == ord('s'):  # 停止初始化
+        stop_initialization()
+    elif key == ord('r'):  # 重新播放
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        frame_count = 0
+        print("重新播放视频")
+
+# 显示控制说明
+print("\n控制说明：")
+print("'i' - 开始初始化车道掩膜")
+print("'s' - 停止初始化车道掩膜")
+print("'r' - 重新播放视频")
+print("'q' - 退出程序")
 
 cap.release()
 cv2.destroyAllWindows()
