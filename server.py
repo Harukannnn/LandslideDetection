@@ -99,20 +99,36 @@ class VideoStream:
                         processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
                 elif self.is_detecting:
                     if self.accumulated_mask is not None:
-                        # 确保掩膜尺寸与帧匹配
-                        mask = cv2.resize(self.accumulated_mask, (640, 480))
-                        processed_frame = process_frame(display_frame, mask)
+                        try:
+                            # 确保掩膜尺寸与帧匹配
+                            mask = cv2.resize(self.accumulated_mask, (640, 480))
+                            # 将掩膜转换为与帧相同的数据类型
+                            mask = mask.astype(np.uint8)
+                            # 将掩膜作为参数传递给 process_frame
+                            processed_frame = process_frame(display_frame, mask)
+                            # 在检测结果上显示掩膜
+                            mask_overlay = processed_frame.copy()
+                            mask_overlay[mask > 0] = [0, 255, 0]
+                            processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
+                        except Exception as e:
+                            print(f"处理掩膜时出错: {e}")
+                            processed_frame = process_frame(display_frame)
                     else:
                         processed_frame = process_frame(display_frame)
                 else:
                     # 非初始化模式下显示累计掩膜
                     processed_frame = display_frame.copy()
                     if self.accumulated_mask is not None:
-                        # 确保掩膜尺寸与帧匹配
-                        mask = cv2.resize(self.accumulated_mask, (640, 480))
-                        mask_overlay = processed_frame.copy()
-                        mask_overlay[mask > 0] = [0, 255, 0]
-                        processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
+                        try:
+                            # 确保掩膜尺寸与帧匹配
+                            mask = cv2.resize(self.accumulated_mask, (640, 480))
+                            # 将掩膜转换为与帧相同的数据类型
+                            mask = mask.astype(np.uint8)
+                            mask_overlay = processed_frame.copy()
+                            mask_overlay[mask > 0] = [0, 255, 0]
+                            processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
+                        except Exception as e:
+                            print(f"显示掩膜时出错: {e}")
                 
                 # 更新当前帧
                 with self.frame_lock:

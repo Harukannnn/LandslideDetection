@@ -275,22 +275,20 @@
                         initBtn.textContent = '停止初始化';
                         initBtn.classList.add('active');
                         detectBtn.classList.remove('active');
-                        detectBtn.style.opacity = '0.5';
                         detectBtn.style.pointerEvents = 'none';
+                        detectBtn.style.opacity = '0.5';
                     } else {
-                        initBtn.textContent = '初始化';
+                        initBtn.textContent = '开始初始化';
                         initBtn.classList.remove('active');
                         if (data.has_mask) {
-                            detectBtn.style.opacity = '1';
+                            detectBtn.classList.add('active');
                             detectBtn.style.pointerEvents = 'auto';
+                            detectBtn.style.opacity = '1';
                         }
                     }
                 }
             })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('切换初始化状态时发生错误');
-            });
+            .catch(error => console.error('Error:', error));
         }
 
         function startVideoStream(url) {

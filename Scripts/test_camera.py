@@ -34,10 +34,11 @@ def check_contour_overlap(contour1, contour2):
     # 如果重叠区域大于0，则存在重叠
     return np.sum(overlap) > 0
 
-def process_frame(frame):
+def process_frame(frame, lane_mask=None):
     """
     处理视频帧，进行边坡检测
     :param frame: 输入图像帧
+    :param lane_mask: 车道掩膜，用于过滤掉车道区域的运动
     :return: 处理后的图像帧
     """
     global prev_gray, prev_contours, detection_history
@@ -77,6 +78,20 @@ def process_frame(frame):
     
     # 合并掩膜
     combined_mask = cv2.bitwise_and(motion_mask, angle_mask)
+    
+    # 如果存在车道掩膜，使用它来过滤掉车道区域的运动
+    if lane_mask is not None:
+        try:
+            # 调整车道掩膜大小以匹配处理尺寸
+            lane_mask = cv2.resize(lane_mask, (PROCESS_WIDTH, PROCESS_HEIGHT))
+            # 将车道掩膜转换为二值图像
+            _, lane_mask_binary = cv2.threshold(lane_mask, 1, 255, cv2.THRESH_BINARY)
+            # 反转车道掩膜（使车道区域为0，非车道区域为255）
+            lane_mask_inv = cv2.bitwise_not(lane_mask_binary)
+            # 将运动掩膜与反转的车道掩膜结合
+            combined_mask = cv2.bitwise_and(combined_mask, lane_mask_inv)
+        except Exception as e:
+            print(f"处理车道掩膜时出错: {e}")
     
     # 优化形态学操作
     kernel = np.ones((3,3), np.uint8)  # 减小核大小
