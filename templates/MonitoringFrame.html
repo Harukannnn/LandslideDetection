@@ -58,20 +58,27 @@
         }
         .detect-btn {
             position: absolute;
-            top: 10px;
-            left: 100px;
-            background: rgba(0,0,0,0.5);
+            bottom: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            background-color: #ff4444;
             color: white;
             border: none;
             border-radius: 4px;
-            padding: 5px 10px;
             cursor: pointer;
-        }
-        .detect-btn:hover {
-            background: rgba(0,0,0,0.7);
+            transition: all 0.3s ease;
+            opacity: 0.7;  /* 默认半透明 */
+            pointer-events: none;  /* 默认禁用点击 */
         }
         .detect-btn.active {
-            background: #4CAF50;
+            opacity: 1;  /* 激活时完全不透明 */
+            pointer-events: auto;  /* 激活时允许点击 */
+        }
+        .detect-btn:hover {
+            background-color: #ff6666;
+        }
+        .detect-btn.active:hover {
+            background-color: #cc0000;
         }
         .init-btn {
             position: absolute;
@@ -187,40 +194,37 @@
 
         function createVideoContainer(streamId) {
             const container = document.createElement('div');
+            container.id = `stream-${streamId}`;
             container.className = 'video-container';
-            container.id = `container-${streamId}`;
             
-            const img = document.createElement('img');
-            img.id = `video-${streamId}`;
-            img.src = `/video_feed/${streamId}`;
+            const video = document.createElement('img');
+            video.src = `/video_feed/${streamId}`;
+            video.className = 'video-stream';
             
             const status = document.createElement('div');
             status.className = 'status connected';
-            status.id = `status-${streamId}`;
             status.textContent = '已连接';
             
             const closeBtn = document.createElement('button');
             closeBtn.className = 'close-btn';
             closeBtn.textContent = '关闭';
             closeBtn.onclick = () => stopStream(streamId);
-
-            const detectBtn = document.createElement('button');
-            detectBtn.className = 'detect-btn active';
-            detectBtn.id = `detect-${streamId}`;
-            detectBtn.textContent = '检测开启';
-            detectBtn.onclick = () => toggleDetection(streamId);
-
+            
             const initBtn = document.createElement('button');
             initBtn.className = 'init-btn';
-            initBtn.id = `init-${streamId}`;
             initBtn.textContent = '初始化';
             initBtn.onclick = () => toggleInitialization(streamId);
             
-            container.appendChild(img);
+            const detectBtn = document.createElement('button');
+            detectBtn.className = 'detect-btn';
+            detectBtn.textContent = '开始检测';
+            detectBtn.onclick = () => toggleDetection(streamId);
+            
+            container.appendChild(video);
             container.appendChild(status);
             container.appendChild(closeBtn);
-            container.appendChild(detectBtn);
             container.appendChild(initBtn);
+            container.appendChild(detectBtn);
             
             return container;
         }
@@ -232,13 +236,21 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    const detectBtn = document.getElementById(`detect-${streamId}`);
-                    if (data.detection_enabled) {
-                        detectBtn.textContent = '检测开启';
+                    const container = document.getElementById(`stream-${streamId}`);
+                    const detectBtn = container.querySelector('.detect-btn');
+                    const initBtn = container.querySelector('.init-btn');
+                    
+                    if (data.detecting) {
+                        detectBtn.textContent = '停止检测';
                         detectBtn.classList.add('active');
+                        initBtn.classList.remove('active');
+                        initBtn.style.opacity = '0.5';
+                        initBtn.style.pointerEvents = 'none';
                     } else {
-                        detectBtn.textContent = '检测关闭';
+                        detectBtn.textContent = '开始检测';
                         detectBtn.classList.remove('active');
+                        initBtn.style.opacity = '1';
+                        initBtn.style.pointerEvents = 'auto';
                     }
                 }
             })
@@ -255,13 +267,23 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    const initBtn = document.getElementById(`init-${streamId}`);
+                    const container = document.getElementById(`stream-${streamId}`);
+                    const initBtn = container.querySelector('.init-btn');
+                    const detectBtn = container.querySelector('.detect-btn');
+                    
                     if (data.initializing) {
                         initBtn.textContent = '停止初始化';
                         initBtn.classList.add('active');
+                        detectBtn.classList.remove('active');
+                        detectBtn.style.opacity = '0.5';
+                        detectBtn.style.pointerEvents = 'none';
                     } else {
                         initBtn.textContent = '初始化';
                         initBtn.classList.remove('active');
+                        if (data.has_mask) {
+                            detectBtn.style.opacity = '1';
+                            detectBtn.style.pointerEvents = 'auto';
+                        }
                     }
                 }
             })
@@ -272,12 +294,11 @@
         }
 
         function startVideoStream(url) {
-            // 清除之前的定时器
-            if (window.streamTimer) {
-                clearInterval(window.streamTimer);
+            if (!url) {
+                alert('请输入视频流URL');
+                return;
             }
 
-            // 发送请求启动视频流
             fetch('/start_stream', {
                 method: 'POST',
                 headers: {
@@ -294,20 +315,10 @@
                 
                 // 创建视频容器
                 const container = createVideoContainer(data.stream_id);
-                document.querySelector('.grid-container').appendChild(container);
-                
-                // 更新视频源
-                const videoElement = container.querySelector('img');
-                videoElement.src = `/video_feed/${data.stream_id}`;
-                
-                // 更新状态
-                const statusElement = container.querySelector('.status');
-                statusElement.textContent = '已连接';
-                statusElement.className = 'status connected';
+                document.getElementById('videoGrid').appendChild(container);
                 
                 // 隐藏URL输入界面
-                document.querySelector('.url-input-container').style.display = 'none';
-                document.querySelector('.add-button').style.display = 'block';
+                hideUrlInput();
             })
             .catch(error => {
                 console.error('启动视频流失败:', error);
@@ -328,7 +339,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    const container = document.getElementById(`container-${streamId}`);
+                    const container = document.getElementById(`stream-${streamId}`);
                     if (container) {
                         container.remove();
                     }

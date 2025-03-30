@@ -3,7 +3,8 @@ import cv2
 import numpy as np
 import threading
 import time
-from Scripts.test_camera import process_frame, is_initializing  # 导入边坡检测函数和初始化状态
+from Scripts.vehicle_detection import VehicleDetection
+from Scripts.test_camera import process_frame
 
 app = Flask(__name__)
 
@@ -18,10 +19,15 @@ class VideoStream:
         self.url = url
         self.is_streaming = False
         self.is_initializing = False
-        self.lane_mask = None
+        self.is_detecting = False
+        self.accumulated_mask = None
         self.prev_gray = None
         self.thread = None
         self.current_frame = None
+        self.frame_lock = threading.Lock()
+        self.last_frame_time = 0
+        self.frame_interval = 1.0 / 30.0
+        self.vehicle_detector = None  # 车辆检测器实例
 
     def generate_frames(self):
         while self.is_streaming:
@@ -52,16 +58,15 @@ class VideoStream:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-        # 获取第一帧用于光流计算
-        ret, frame = cap.read()
-        if not ret:
-            print("无法读取第一帧")
-            return
-        self.prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cap.set(cv2.CAP_PROP_FPS, 30)
 
         while self.is_streaming:
             try:
+                current_time = time.time()
+                if current_time - self.last_frame_time < self.frame_interval:
+                    time.sleep(0.001)
+                    continue
+
                 ret, frame = cap.read()
                 if not ret:
                     print("无法读取视频帧，尝试重新连接...")
@@ -73,15 +78,46 @@ class VideoStream:
                         break
                     continue
 
+                # 保存原始帧用于检测
+                original_frame = frame.copy()
+                # 调整显示尺寸
+                display_frame = cv2.resize(frame, (640, 480))
+                processed_frame = display_frame.copy()
+
                 # 处理帧
-                processed_frame, has_landslide = process_frame(frame)
+                if self.is_initializing and self.vehicle_detector:
+                    # 使用原始帧进行检测和掩膜生成
+                    processed_frame, mask = self.vehicle_detector.detect_vehicles_and_generate_mask(original_frame)
+                    # 调整处理后的帧大小用于显示
+                    processed_frame = cv2.resize(processed_frame, (640, 480))
+                    if mask is not None:
+                        # 调整掩膜大小以匹配显示尺寸
+                        mask = cv2.resize(mask, (640, 480))
+                        # 显示掩膜
+                        mask_overlay = processed_frame.copy()
+                        mask_overlay[mask > 0] = [0, 255, 0]
+                        processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
+                elif self.is_detecting:
+                    if self.accumulated_mask is not None:
+                        # 确保掩膜尺寸与帧匹配
+                        mask = cv2.resize(self.accumulated_mask, (640, 480))
+                        processed_frame = process_frame(display_frame, mask)
+                    else:
+                        processed_frame = process_frame(display_frame)
+                else:
+                    # 非初始化模式下显示累计掩膜
+                    processed_frame = display_frame.copy()
+                    if self.accumulated_mask is not None:
+                        # 确保掩膜尺寸与帧匹配
+                        mask = cv2.resize(self.accumulated_mask, (640, 480))
+                        mask_overlay = processed_frame.copy()
+                        mask_overlay[mask > 0] = [0, 255, 0]
+                        processed_frame = cv2.addWeighted(processed_frame, 0.7, mask_overlay, 0.3, 0)
                 
                 # 更新当前帧
-                self.current_frame = processed_frame.copy()
-                
-                # 更新光流计算的灰度图
-                if not self.is_initializing:
-                    self.prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                with self.frame_lock:
+                    self.current_frame = processed_frame.copy()
+                self.last_frame_time = current_time
 
             except Exception as e:
                 print(f"处理帧时出错: {e}")
@@ -89,20 +125,61 @@ class VideoStream:
 
         cap.release()
 
+    def get_frame(self):
+        with self.frame_lock:
+            return self.current_frame.copy() if self.current_frame is not None else None
+
+    def start_initialization(self):
+        """开始初始化"""
+        self.is_initializing = True
+        self.is_detecting = False
+        self.vehicle_detector = VehicleDetection()
+        self.vehicle_detector.start_initialization()
+
+    def stop_initialization(self):
+        """停止初始化"""
+        if self.vehicle_detector:
+            # 获取累计掩膜并调整大小
+            mask = self.vehicle_detector.stop_initialization()
+            if mask is not None:
+                self.accumulated_mask = cv2.resize(mask, (640, 480))
+            self.vehicle_detector.cleanup()
+            self.vehicle_detector = None
+        self.is_initializing = False
+
 @app.route('/')
 def index():
     return render_template('MonitoringFrame.html')
 
 @app.route('/video_feed/<int:stream_id>')
 def video_feed(stream_id):
-    if stream_id in streams:
-        return Response(streams[stream_id].generate_frames(),
-                        mimetype='multipart/x-mixed-replace; boundary=frame')
-    return "Stream not found", 404
+    def generate_frames():
+        last_frame_time = 0
+        frame_interval = 1.0 / 30.0  # 限制帧率为30fps
+        
+        while True:
+            current_time = time.time()
+            if current_time - last_frame_time < frame_interval:
+                time.sleep(0.001)  # 短暂休眠以减少CPU使用
+                continue
+                
+            if stream_id in streams:
+                stream = streams[stream_id]
+                frame = stream.get_frame()
+                if frame is not None:
+                    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                    last_frame_time = current_time
+            time.sleep(0.001)  # 短暂休眠以减少CPU使用
+
+    return Response(generate_frames(),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/start_stream', methods=['POST'])
 def start_stream():
-    global current_frame, streams
+    global streams
     try:
         data = request.get_json()
         url = data.get('url')
@@ -113,7 +190,8 @@ def start_stream():
         stream = VideoStream(url)
         stream.is_streaming = True
         stream.is_initializing = False
-        stream.lane_mask = None
+        stream.is_detecting = False
+        stream.accumulated_mask = None
         stream.prev_gray = None
         stream.thread = threading.Thread(target=stream.process_video_stream)
         stream.thread.start()
@@ -122,39 +200,53 @@ def start_stream():
         stream_id = len(streams)
         streams[stream_id] = stream
         
-        return jsonify({'message': '视频流已启动', 'stream_id': stream_id})
+        return jsonify({'success': True, 'message': '视频流已启动', 'stream_id': stream_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/stop_stream/<int:stream_id>', methods=['POST'])
-def stop_stream(stream_id):
-    global streams
+@app.route('/stop_stream', methods=['POST'])
+def stop_stream():
     try:
+        data = request.get_json()
+        stream_id = data.get('streamId')
+        
         if stream_id in streams:
+            # 停止视频流
             stream = streams[stream_id]
             stream.is_streaming = False
             stream.is_initializing = False
             if stream.thread:
                 stream.thread.join()
             del streams[stream_id]
-            return jsonify({'message': '视频流已停止'})
-        return jsonify({'error': '未找到指定的视频流'}), 404
+            
+            # 清理全局变量
+            global lane_mask, is_initializing
+            lane_mask = None
+            is_initializing = False
+            
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'message': '视频流不存在'})
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"停止视频流时出错: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/toggle_initialization/<int:stream_id>', methods=['POST'])
 def toggle_initialization(stream_id):
-    global streams, is_initializing, lane_mask
+    global streams
     try:
         if stream_id in streams:
             stream = streams[stream_id]
-            stream.is_initializing = not stream.is_initializing
-            # 同步更新全局变量
-            is_initializing = stream.is_initializing
             if not stream.is_initializing:
-                # 保存车道掩膜
-                stream.lane_mask = lane_mask
-            return jsonify({'success': True, 'initializing': stream.is_initializing})
+                stream.start_initialization()
+            else:
+                stream.stop_initialization()
+            return jsonify({
+                'success': True, 
+                'initializing': stream.is_initializing,
+                'has_mask': stream.accumulated_mask is not None
+            })
         return jsonify({'error': '未找到指定的视频流'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -166,7 +258,9 @@ def toggle_detection(stream_id):
         if stream_id in streams:
             stream = streams[stream_id]
             stream.is_detecting = not stream.is_detecting
-            return jsonify({'is_detecting': stream.is_detecting})
+            if stream.is_detecting:
+                stream.is_initializing = False  # 检测时停止初始化
+            return jsonify({'success': True, 'detecting': stream.is_detecting})
         return jsonify({'error': '未找到指定的视频流'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -2,186 +2,170 @@
 import cv2
 import numpy as np
 import time
-import torch
-import os
-
-# 获取当前文件所在目录的路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# 构建yolov5文件夹的路径
-yolov5_path = os.path.join(current_dir, '..', 'yolov5')
-
-# 加载YOLO模型
-try:
-    model = torch.hub.load(yolov5_path, 'yolov5s', source='local')
-    model.conf = 0.3  # 降低置信度阈值
-    model.classes = [2,3,5,7]  # 车辆类别
-    print(f"成功加载模型: yolov5s")
-except Exception as e:
-    print(f"加载模型失败: {e}")
-    print(f"请确保yolov5文件夹存在于: {yolov5_path}")
-    model = None
 
 # 全局变量
-current_frame = None
-is_streaming = False
-is_initializing = False  # 是否正在初始化
-lane_mask = None  # 车道掩膜
-prev_gray = None  # 用于光流计算的上一帧灰度图
+prev_gray = None  # 用于存储前一帧的灰度图
+prev_contours = []  # 用于存储前一帧的轮廓
+detection_history = []  # 用于存储检测历史
+HISTORY_LENGTH = 2  # 减少历史记录长度，使检测更快响应
 
-def initialize_lane_mask(frame):
+# 处理尺寸
+PROCESS_WIDTH = 320  # 减小处理尺寸
+PROCESS_HEIGHT = 240
+
+def check_contour_overlap(contour1, contour2):
     """
-    使用YOLO检测车辆并生成车道掩膜
+    检查两个轮廓是否重叠
+    :param contour1: 第一个轮廓
+    :param contour2: 第二个轮廓
+    :return: 是否重叠
     """
-    global lane_mask
-    if model is None:
-        print("模型未加载，无法进行初始化")
-        return frame
-        
-    # 调整图像大小
-    frame = cv2.resize(frame, (640, 480))
-    
-    # 使用YOLO进行检测
-    results = model(frame)
-    
     # 创建掩膜
-    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    mask1 = np.zeros((PROCESS_HEIGHT, PROCESS_WIDTH), dtype=np.uint8)
+    mask2 = np.zeros((PROCESS_HEIGHT, PROCESS_WIDTH), dtype=np.uint8)
     
-    # 在图像上绘制检测结果
-    for det in results.xyxy[0]:  # 遍历检测结果
-        x1, y1, x2, y2, conf, cls = det.cpu().numpy()
-        
-        # 处理所有车辆类别（2:car, 3:motorcycle, 5:bus, 7:truck）
-        if int(cls) in [2, 3, 5, 7] and conf > 0.3:  # 降低置信度阈值
-            # 扩大检测框的范围
-            width = x2 - x1
-            height = y2 - y1
-            x1 = max(0, int(x1 - width * 0.3))
-            x2 = min(frame.shape[1], int(x2 + width * 0.3))
-            y1 = max(0, int(y1 - height * 0.2))
-            y2 = min(frame.shape[0], int(y2 + height * 0.2))
-            
-            # 在掩膜上标记车辆区域
-            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-            
-            # 绘制边界框
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            # 添加标签
-            class_names = {2: 'Car', 3: 'Motorcycle', 5: 'Bus', 7: 'Truck'}
-            label = f'{class_names[int(cls)]} {conf:.2f}'
-            cv2.putText(frame, label, (x1, y1 - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    # 绘制轮廓
+    cv2.drawContours(mask1, [contour1], -1, 255, -1)
+    cv2.drawContours(mask2, [contour2], -1, 255, -1)
     
-    # 对掩膜进行膨胀操作
-    kernel = np.ones((30, 30), np.uint8)
-    mask = cv2.dilate(mask, kernel, iterations=1)
+    # 计算重叠区域
+    overlap = cv2.bitwise_and(mask1, mask2)
     
-    # 更新全局掩膜
-    if lane_mask is None:
-        lane_mask = mask
-    else:
-        # 使用OR操作合并掩膜
-        lane_mask = cv2.bitwise_or(lane_mask, mask)
-    
-    # 在图像上显示掩膜区域
-    mask_overlay = frame.copy()
-    mask_overlay[mask > 0] = [0, 255, 0]  # 用绿色显示掩膜区域
-    frame = cv2.addWeighted(frame, 0.7, mask_overlay, 0.3, 0)
-    
-    return frame
+    # 如果重叠区域大于0，则存在重叠
+    return np.sum(overlap) > 0
 
 def process_frame(frame):
     """
-    处理单帧图像，进行边坡塌方检测
+    处理视频帧，进行边坡检测
     :param frame: 输入图像帧
-    :return: 处理后的图像帧和是否检测到塌方
+    :return: 处理后的图像帧
     """
-    global prev_gray, lane_mask
-    try:
-        # 调整图像大小
-        frame = cv2.resize(frame, (640, 480))
+    global prev_gray, prev_contours, detection_history
+    
+    if frame is None:
+        return None
         
-        # 如果正在初始化，使用YOLO检测
-        if is_initializing:
-            frame = initialize_lane_mask(frame)
-            return frame, False
+    # 调整图像大小
+    frame = cv2.resize(frame, (640, 480))
+    process_frame = cv2.resize(frame, (PROCESS_WIDTH, PROCESS_HEIGHT))
+    
+    # 转换为灰度图
+    gray = cv2.cvtColor(process_frame, cv2.COLOR_BGR2GRAY)
+    
+    # 计算光流
+    if prev_gray is None:
+        prev_gray = gray.copy()
+        return frame
+        
+    # 优化光流计算参数
+    flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    
+    # 计算运动幅度和方向
+    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    
+    # 设置运动检测阈值
+    motion_threshold = 2.5  # 降低运动幅度阈值
+    angle_threshold = 30  # 增加角度阈值范围
+    
+    # 创建运动掩膜
+    motion_mask = np.zeros_like(gray)
+    motion_mask[magnitude > motion_threshold] = 255
+    
+    # 创建方向掩膜（垂直运动）
+    angle_mask = np.zeros_like(gray)
+    angle_mask[angle > np.radians(angle_threshold)] = 255
+    
+    # 合并掩膜
+    combined_mask = cv2.bitwise_and(motion_mask, angle_mask)
+    
+    # 优化形态学操作
+    kernel = np.ones((3,3), np.uint8)  # 减小核大小
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+    
+    # 查找轮廓
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # 设置面积阈值（根据处理尺寸调整）
+    area_threshold = 500  # 降低面积阈值
+    
+    # 计算整个图像的面积
+    total_area = PROCESS_WIDTH * PROCESS_HEIGHT
+    
+    # 当前帧的检测结果
+    current_detections = []
+    
+    # 在图像上绘制检测结果
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > area_threshold:
+            # 计算运动区域占整个图像的比例
+            area_ratio = area / total_area
             
-        # 转换为灰度图
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # 确保有前一帧的灰度图
-        if prev_gray is None:
-            prev_gray = gray
-            return frame, False
-            
-        # 如果掩膜已生成，进行光流检测
-        if lane_mask is not None:
-            # 生成非车道区域掩膜
-            non_lane_mask = cv2.bitwise_not(lane_mask)
-            masked_frame = cv2.bitwise_and(frame, frame, mask=non_lane_mask)
-            gray = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
-            
-            # 在图像上显示掩膜区域
-            mask_overlay = frame.copy()
-            mask_overlay[lane_mask > 0] = [0, 255, 0]  # 用绿色显示掩膜区域
-            frame = cv2.addWeighted(frame, 0.7, mask_overlay, 0.3, 0)
-        
-        # 计算光流
-        flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        
-        # 更新前一帧的灰度图
-        prev_gray = gray
-        
-        # 计算光流的幅度和方向
-        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-        
-        # 运动检测参数
-        motion_threshold = 2.0
-        area_threshold = 5000
-        angle_threshold = 75
-        
-        # 创建运动掩膜
-        motion_mask = cv2.inRange(magnitude, motion_threshold, 10.0)
-        
-        # 形态学操作
-        kernel = np.ones((3, 3), np.uint8)
-        motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel)
-        motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel)
-        
-        # 轮廓检测
-        contours, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # 检测大面积运动区域
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area > area_threshold:
-                x, y, w, h = cv2.boundingRect(cnt)
-                roi_angle = np.mean(angle[y:y+h, x:x+w]) * 180 / np.pi
+            # 如果运动区域过大，可能是摄像头抖动
+            if area_ratio > 0.8:  # 增加允许的运动区域比例
+                continue
                 
-                # 检查是否为垂直运动
-                if abs(roi_angle - 90) < angle_threshold:
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                    cv2.putText(frame, "Landslide!", (x, y - 10), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    return frame, True
-        
-        # 显示光流结果
-        hsv = np.zeros_like(frame)
-        hsv[..., 1] = 255
-        hsv[..., 0] = angle * 180 / np.pi / 2
-        hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
-        flow_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-        
-        # 将光流结果叠加到原始帧上
-        frame = cv2.addWeighted(frame, 0.7, flow_rgb, 0.3, 0)
-        
-        return frame, False
-        
-    except Exception as e:
-        print(f"处理帧时出错: {e}")
-        return frame, False
+            # 计算轮廓的标准差（用于判断运动的稳定性）
+            x, y, w, h = cv2.boundingRect(contour)
+            roi = magnitude[y:y+h, x:x+w]
+            std_dev = np.std(roi)
+            
+            # 计算运动方向的一致性
+            roi_angle = angle[y:y+h, x:x+w]
+            angle_std = np.std(roi_angle) * 180 / np.pi
+            
+            # 如果标准差小于阈值且方向一致，说明运动比较稳定
+            if std_dev < 3.0 and angle_std < 45:  # 放宽标准差和角度一致性要求
+                # 检查与前一帧轮廓的重叠
+                overlap = False
+                for prev_contour in prev_contours:
+                    if check_contour_overlap(contour, prev_contour):
+                        overlap = True
+                        break
+                
+                if not overlap:
+                    # 将坐标转换回原始尺寸
+                    x = int(x * 640 / PROCESS_WIDTH)
+                    y = int(y * 480 / PROCESS_HEIGHT)
+                    w = int(w * 640 / PROCESS_WIDTH)
+                    h = int(h * 480 / PROCESS_HEIGHT)
+                    
+                    # 绘制边界框
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                    # 添加标签
+                    cv2.putText(frame, f'Landslide {area:.0f}', (x, y-10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    current_detections.append((x, y, w, h))
+    
+    # 更新检测历史
+    detection_history.append(len(current_detections))
+    if len(detection_history) > HISTORY_LENGTH:
+        detection_history.pop(0)
+    
+    # 只有当连续多帧都检测到目标时才显示
+    if len(detection_history) == HISTORY_LENGTH and all(d > 0 for d in detection_history):
+        # 绘制所有检测到的区域
+        for x, y, w, h in current_detections:
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+            cv2.putText(frame, f'Landslide', (x, y-10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    
+    # 更新前一帧的灰度图和轮廓
+    prev_gray = gray.copy()
+    prev_contours = contours
+    
+    return frame
 
 def process_video_stream(url):
-    global current_frame, is_streaming, prev_gray
+    """
+    处理视频流
+    :param url: 视频流URL
+    """
+    global prev_gray, prev_contours, detection_history
+    prev_gray = None  # 重置prev_gray
+    prev_contours = []  # 重置prev_contours
+    detection_history = []  # 重置检测历史
     
     print("正在连接网络视频流...")
     cap = cv2.VideoCapture(url)
@@ -194,15 +178,13 @@ def process_video_stream(url):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FPS, 30)  # 设置帧率
 
-    # 获取第一帧用于光流计算
-    ret, frame = cap.read()
-    if not ret:
-        print("无法读取第一帧")
-        return
-    prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # 创建窗口
+    cv2.namedWindow('Landslide Detection', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('Landslide Detection', 1280, 960)
 
-    while is_streaming:
+    while True:
         try:
             ret, frame = cap.read()
             if not ret:
@@ -216,25 +198,23 @@ def process_video_stream(url):
                 continue
 
             # 处理帧
-            processed_frame, has_landslide = process_frame(frame)
+            processed_frame = process_frame(frame)
             
-            # 更新全局帧
-            current_frame = processed_frame.copy()
+            # 显示结果
+            cv2.imshow('Landslide Detection', processed_frame)
             
-            # 更新光流计算的灰度图
-            if not is_initializing:
-                prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # 按键处理
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
         except Exception as e:
             print(f"处理帧时出错: {e}")
             continue
 
     cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     # 如果直接运行此文件，使用默认URL
-    url = "http://192.168.26.23:8080/stream.mjpeg"
-    is_streaming = True
+    url = "http://192.168.102.23:8080/stream.mjpeg"
     process_video_stream(url)
-
-cv2.destroyAllWindows()
